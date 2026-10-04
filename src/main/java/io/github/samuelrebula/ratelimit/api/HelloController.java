@@ -13,6 +13,11 @@ public class HelloController {
         return new HelloResponse("ok");
     }
 
+    @GetMapping("/expensive")
+    public HelloResponse expensive() {
+        return new HelloResponse("ok");
+    }
+
     public record HelloResponse(String message) {
     }
 }

@@ -9,6 +9,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -30,7 +31,10 @@ class RateLimitFilterTest {
     void allowsRequestWithinLimit() throws Exception {
         mockMvc.perform(get("/api/hello").with(remoteAddress("203.0.113.10")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("ok"));
+                .andExpect(jsonPath("$.message").value("ok"))
+                .andExpect(header().string("RateLimit-Policy", "\"default\";q=1;w=60"))
+                .andExpect(header().string("RateLimit", "\"default\";r=0;t=60"))
+                .andExpect(header().doesNotExist("Retry-After"));
     }
 
     @Test
@@ -41,8 +45,15 @@ class RateLimitFilterTest {
 
         mockMvc.perform(get("/api/hello").with(remoteAddress(consumer)))
                 .andExpect(status().isTooManyRequests())
-                .andExpect(content().contentTypeCompatibleWith("application/json"))
-                .andExpect(jsonPath("$.detail").value("Rate limit exceeded"));
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+                .andExpect(jsonPath("$.type").value(RateLimitHttp.QUOTA_EXCEEDED_TYPE))
+                .andExpect(jsonPath("$.title").value(RateLimitHttp.QUOTA_EXCEEDED_TITLE))
+                .andExpect(jsonPath("$.status").value(429))
+                .andExpect(jsonPath("$.detail").value("Rate limit exceeded"))
+                .andExpect(jsonPath("$.violated-policies[0]").value("default"))
+                .andExpect(header().string("Retry-After", "60"))
+                .andExpect(header().string("RateLimit-Policy", "\"default\";q=1;w=60"))
+                .andExpect(header().string("RateLimit", "\"default\";r=0;t=60"));
     }
 
     @Test
@@ -54,9 +65,41 @@ class RateLimitFilterTest {
     }
 
     @Test
+    void normalizesEquivalentAddressesIntoOneBucket() throws Exception {
+        mockMvc.perform(get("/api/hello").with(remoteAddress("::ffff:203.0.113.45")))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/hello").with(remoteAddress("203.0.113.45")))
+                .andExpect(status().isTooManyRequests());
+
+        mockMvc.perform(get("/api/hello").with(remoteAddress("[2001:DB8::1]:443")))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/hello").with(remoteAddress("2001:db8::1")))
+                .andExpect(status().isTooManyRequests());
+    }
+
+    @Test
+    void ignoresForwardedHeaderWhenTrustIsDisabled() throws Exception {
+        String remote = "203.0.113.46";
+        mockMvc.perform(get("/api/hello").with(remoteAddress(remote)).header("X-Forwarded-For", "198.51.100.10"))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/hello").with(remoteAddress(remote)).header("X-Forwarded-For", "198.51.100.11"))
+                .andExpect(status().isTooManyRequests());
+    }
+
+    @Test
+    void sharesTheUnknownBucketWhenTheAddressIsBlank() throws Exception {
+        mockMvc.perform(get("/api/hello").with(remoteAddress("")))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/hello").with(remoteAddress("   ")))
+                .andExpect(status().isTooManyRequests());
+    }
+
+    @Test
     void doesNotLimitPathsOutsideConfiguredPolicies() throws Exception {
         mockMvc.perform(get("/not-limited").with(remoteAddress("203.0.113.40")))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isNotFound())
+                .andExpect(header().doesNotExist("RateLimit"))
+                .andExpect(header().doesNotExist("RateLimit-Policy"));
         mockMvc.perform(get("/not-limited").with(remoteAddress("203.0.113.40")))
                 .andExpect(status().isNotFound());
     }

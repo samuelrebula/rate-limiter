@@ -12,7 +12,7 @@ class RateLimitConfigurationTest {
     @Test
     void localStorageDoesNotOpenRedis() {
         RateLimiter limiter = RateLimitConfiguration.create(
-                new RateLimitProperties("local", null, List.of()),
+                new RateLimitProperties("local", false, null, List.of()),
                 () -> {
                     throw new AssertionError("Redis connection should not be opened");
                 });
@@ -22,7 +22,7 @@ class RateLimitConfigurationTest {
 
     @Test
     void rejectsUnknownStorage() {
-        RateLimitProperties properties = new RateLimitProperties("memory", null, List.of());
+        RateLimitProperties properties = new RateLimitProperties("memory", false, null, List.of());
 
         assertThatThrownBy(() -> RateLimitConfiguration.create(properties, () -> {
             throw new AssertionError("Redis connection should not be opened");

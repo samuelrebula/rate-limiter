@@ -11,13 +11,33 @@ spring:
 
 server:
   port: 8080
+  forward-headers-strategy: none
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      show-details: never
+  health:
+    redis:
+      enabled: false
 
 rate-limit:
   storage: redis
+  trust-forwarded-headers: false
   redis:
     command-timeout: 1s
     key-expiration-margin: 10s
   policies:
+    - name: expensive
+      patterns:
+        - /api/expensive
+      capacity: 10
+      refill-tokens: 10
+      refill-period: 1m
     - name: default
       patterns:
         - /api/**

@@ -15,6 +15,14 @@ import io.lettuce.core.codec.StringCodec;
 
 import java.time.Duration;
 
+/**
+ * Lettuce connection used only for bucket state.
+ *
+ * <p>A refused connection, a command past {@code command-timeout}, or a dropped socket
+ * fails the call. Lettuce rejects commands while the socket is down and reconnects on
+ * its own, so a Redis restart does not require a process restart. Keys live only in
+ * Redis; a restart without persistence starts each bucket full again.
+ */
 public final class RedisRateLimitConnection implements AutoCloseable {
 
     private final RedisClient client;
@@ -76,6 +84,10 @@ public final class RedisRateLimitConnection implements AutoCloseable {
 
     public RedisRateLimiter rateLimiter() {
         return new RedisRateLimiter(proxyManager);
+    }
+
+    public void ping() {
+        connection.sync().ping();
     }
 
     @Override

@@ -25,4 +25,12 @@ class HelloControllerTest {
                 .andExpect(content().contentTypeCompatibleWith("application/json"))
                 .andExpect(jsonPath("$.message").value("ok"));
     }
+
+    @Test
+    void expensiveReturnsOk() throws Exception {
+        mockMvc.perform(get("/api/expensive"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("application/json"))
+                .andExpect(jsonPath("$.message").value("ok"));
+    }
 }

@@ -1,11 +1,17 @@
 package io.github.samuelrebula.ratelimit.ratelimit;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisConnectionDetails;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
+import org.springframework.web.filter.ForwardedHeaderFilter;
 
 import java.util.List;
 import java.util.function.Supplier;
@@ -13,6 +19,8 @@ import java.util.function.Supplier;
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(RateLimitProperties.class)
 public class RateLimitConfiguration {
+
+    private static final Logger log = LoggerFactory.getLogger(RateLimitConfiguration.class);
 
     @Bean
     PolicyResolver policyResolver(RateLimitProperties properties) {
@@ -24,7 +32,21 @@ public class RateLimitConfiguration {
                         policy.refillTokens(),
                         policy.refillPeriod()))
                 .toList();
-        return new PolicyResolver(policies);
+        PolicyResolver resolver = new PolicyResolver(policies);
+        if (policies.isEmpty()) {
+            log.info("Loaded no rate limit policies");
+        } else {
+            for (RateLimitPolicy policy : policies) {
+                log.info(
+                        "Loaded rate limit policy {} capacity {} refill {} per {} for {}",
+                        policy.name(),
+                        policy.capacity(),
+                        policy.refillTokens(),
+                        policy.refillPeriod(),
+                        policy.patterns());
+            }
+        }
+        return resolver;
     }
 
     @Bean
@@ -56,8 +78,44 @@ public class RateLimitConfiguration {
     }
 
     @Bean
-    RateLimitFilter rateLimitFilter(PolicyResolver policyResolver, RateLimiter rateLimiter) {
-        return new RateLimitFilter(policyResolver, rateLimiter);
+    ClientIpConsumerKeyResolver consumerKeyResolver() {
+        return new ClientIpConsumerKeyResolver();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rate-limit.trust-forwarded-headers", havingValue = "true")
+    FilterRegistrationBean<ForwardedHeaderFilter> forwardedHeaderFilter() {
+        FilterRegistrationBean<ForwardedHeaderFilter> registration =
+                new FilterRegistrationBean<>(new ForwardedHeaderFilter());
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
+        return registration;
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rate-limit.storage", havingValue = "redis")
+    RateLimitStoreHealthIndicator rateLimitStoreHealthIndicator(RedisRateLimitConnection connection) {
+        return new RateLimitStoreHealthIndicator(connection);
+    }
+
+    @Bean
+    RateLimitMetrics rateLimitMetrics(MeterRegistry registry) {
+        return new RateLimitMetrics(registry);
+    }
+
+    @Bean
+    RateLimitFilter rateLimitFilter(
+            PolicyResolver policyResolver,
+            RateLimiter rateLimiter,
+            ClientIpConsumerKeyResolver consumerKeys,
+            RateLimitProperties properties,
+            RateLimitMetrics metrics
+    ) {
+        return new RateLimitFilter(
+                policyResolver,
+                rateLimiter,
+                consumerKeys,
+                properties.redis().commandTimeout(),
+                metrics);
     }
 
     static RateLimiter create(RateLimitProperties properties, Supplier<RedisRateLimitConnection> connections) {

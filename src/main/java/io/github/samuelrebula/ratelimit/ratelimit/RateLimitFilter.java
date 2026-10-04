@@ -1,5 +1,6 @@
 package io.github.samuelrebula.ratelimit.ratelimit;
 
+import io.micrometer.core.instrument.Timer;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -8,26 +9,35 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Optional;
 
-@Order(Ordered.HIGHEST_PRECEDENCE)
+@Order(Ordered.HIGHEST_PRECEDENCE + 1)
 public final class RateLimitFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(RateLimitFilter.class);
-    private static final String REJECTED_BODY = "{\"detail\":\"Rate limit exceeded\"}";
-    private static final String STORE_FAILURE_BODY = "{\"detail\":\"Rate limit store unavailable\"}";
 
     private final PolicyResolver policies;
     private final RateLimiter rateLimiter;
+    private final ClientIpConsumerKeyResolver consumerKeys;
+    private final Duration storeRetryAfter;
+    private final RateLimitMetrics metrics;
 
-    public RateLimitFilter(PolicyResolver policies, RateLimiter rateLimiter) {
+    public RateLimitFilter(
+            PolicyResolver policies,
+            RateLimiter rateLimiter,
+            ClientIpConsumerKeyResolver consumerKeys,
+            Duration storeRetryAfter,
+            RateLimitMetrics metrics
+    ) {
         this.policies = policies;
         this.rateLimiter = rateLimiter;
+        this.consumerKeys = consumerKeys;
+        this.storeRetryAfter = storeRetryAfter;
+        this.metrics = metrics;
     }
 
     @Override
@@ -42,35 +52,24 @@ public final class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
+        Timer.Sample sample = metrics.start();
         RateLimitDecision decision;
         try {
-            decision = rateLimiter.consume(policy.get(), consumerKey(request));
+            decision = rateLimiter.consume(policy.get(), consumerKeys.resolve(request));
         } catch (RateLimitStoreException exception) {
+            metrics.recordStoreError(sample, policy.get().name());
             log.error("Rate limit store is unavailable", exception);
-            reject(response, HttpStatus.INTERNAL_SERVER_ERROR, STORE_FAILURE_BODY);
+            RateLimitHttp.writeStoreUnavailable(response, storeRetryAfter);
             return;
         }
+        metrics.recordDecision(sample, policy.get().name(), decision.allowed());
         if (decision.allowed()) {
+            RateLimitHttp.writeQuota(response, policy.get(), decision);
             filterChain.doFilter(request, response);
             return;
         }
 
-        reject(response, HttpStatus.TOO_MANY_REQUESTS, REJECTED_BODY);
-    }
-
-    private static void reject(HttpServletResponse response, HttpStatus status, String body) throws IOException {
-        response.setStatus(status.value());
-        response.setContentType("application/json;charset=UTF-8");
-        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        response.getWriter().write(body);
-    }
-
-    private static String consumerKey(HttpServletRequest request) {
-        String remoteAddress = request.getRemoteAddr();
-        if (remoteAddress == null || remoteAddress.isBlank()) {
-            return "unknown";
-        }
-        return remoteAddress;
+        RateLimitHttp.writeRejection(response, policy.get(), decision);
     }
 
     private static String pathWithinApplication(HttpServletRequest request) {

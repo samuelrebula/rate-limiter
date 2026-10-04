@@ -6,7 +6,12 @@ import java.time.Duration;
 import java.util.List;
 
 @ConfigurationProperties(prefix = "rate-limit")
-public record RateLimitProperties(String storage, Redis redis, List<Policy> policies) {
+public record RateLimitProperties(
+        String storage,
+        boolean trustForwardedHeaders,
+        Redis redis,
+        List<Policy> policies
+) {
 
     public RateLimitProperties {
         storage = (storage == null || storage.isBlank()) ? "local" : storage;
