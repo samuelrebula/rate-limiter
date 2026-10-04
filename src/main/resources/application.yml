@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: rate-limiter
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 1s
+      repositories:
+        enabled: false
+
+server:
+  port: 8080
+
+rate-limit:
+  storage: redis
+  redis:
+    command-timeout: 1s
+    key-expiration-margin: 10s
+  policies:
+    - name: default
+      patterns:
+        - /api/**
+      capacity: 100
+      refill-tokens: 100
+      refill-period: 1m
